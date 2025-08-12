@@ -1,0 +1,52 @@
+html, body { height: 100%; margin: 0; }
+body { background: #0b0f16; color: #e5e7eb; font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }
+#app { position: fixed; inset: 0; }
+.overlay {
+  position: fixed; inset: 0; display: grid; place-items: center; pointer-events: none;
+  background: linear-gradient(180deg, rgba(2,6,23,0.65), rgba(2,6,23,0.35));
+  color: #e5e7eb; text-align: center; padding: 24px;
+  transition: opacity 160ms ease;
+}
+.overlay.hidden { opacity: 0; }
+.panel { pointer-events: auto; padding: 16px 18px; border-radius: 12px; border: 1px solid rgba(148,163,184,0.2);
+         background: rgba(15,23,42,0.8); backdrop-filter: blur(6px); box-shadow: 0 10px 25px rgba(0,0,0,0.35); }
+.panel h1 { margin: 0 0 8px; font-size: 18px; }
+.panel p { margin: 6px 0; font-size: 14px; color: #cbd5e1; }
+.btn { display: inline-block; margin-top: 10px; padding: 10px 14px; border-radius: 10px;
+       background: #22d3ee; color: #0b0f16; font-weight: 700; cursor: pointer; border: none; }
+.hint { position: fixed; left: 12px; bottom: 10px; font-size: 12px; color: #94a3b8; background: rgba(2,6,23,0.55);
+        padding: 6px 8px; border-radius: 8px; border: 1px solid rgba(148,163,184,0.15); }
+.error { color: #fecaca; }
+
+/* Crosshair */
+.crosshair {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 22px;
+  height: 22px;
+  pointer-events: none;
+  opacity: 0.9;
+  z-index: 5;
+  /* Two thin lines with a small gap at the center */
+  background:
+    linear-gradient(#e5e7eb, #e5e7eb) center/2px 14px no-repeat,
+    linear-gradient(#e5e7eb, #e5e7eb) center/14px 2px no-repeat;
+  filter: drop-shadow(0 0 1px rgba(0,0,0,0.6));
+}
+
+/* Speed meter HUD */
+.speed-meter {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #e5e7eb;
+  background: rgba(2,6,23,0.55);
+  border: 1px solid rgba(148,163,184,0.2);
+  z-index: 6;
+  pointer-events: none;
+}
