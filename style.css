@@ -50,3 +50,18 @@ body { background: #0b0f16; color: #e5e7eb; font-family: system-ui, -apple-syste
   z-index: 6;
   pointer-events: none;
 }
+
+/* Performance meter HUD */
+.perf-meter {
+  position: fixed;
+  top: 8px;
+  right: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #e5e7eb;
+  background: rgba(2,6,23,0.55);
+  border: 1px solid rgba(148,163,184,0.2);
+  z-index: 6;
+  pointer-events: none;
+}
