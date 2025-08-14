@@ -60,16 +60,20 @@ qeTargetRate: 6.0,         // alternations per second to reach max boost
 qeMinIntervalSec: 0.06,    // ignore faster than this (debounce)
 qeMaxIntervalSec: 0.45,    // ignore slower than this (out of cadence)
 // Terrain parameters
-terrainSegments: 96,      // grid resolution of the terrain (reduced for perf)
+terrainSegments: 64,      // reduced grid resolution for better performance
 terrainScale: 0.003,      // noise frequency (world units -> noise space)
 terrainHeight: 18.0,      // max height variation (meters)
-terrainOctaves: 5,
+terrainOctaves: 3,        // reduced octaves for faster terrain generation
 terrainPersistence: 0.5,
 terrainLacunarity: 2.0,
 terrainSeed: 4242,
-treeCount: 120,           // number of trees to scatter (reduced for perf)
-treeMaxTries: 2000,       // placement attempts to find stable ground
-treeSlopeMaxY: 0.9        // require normal.y >= this (flatter ground)
+treeCount: 80,            // reduced tree count for better performance
+treeMaxTries: 1000,       // reduced placement attempts for faster loading
+treeSlopeMaxY: 0.9,       // require normal.y >= this (flatter ground)
+// Performance optimization flags
+simplifiedTrees: true,    // use simpler tree geometry
+fastTextures: true,       // use faster texture generation
+spatialCollision: true    // use spatial partitioning for collisions
   };
 
 // Player collision size (horizontal cylinder radius)
@@ -177,102 +181,126 @@ let jumpBuffer = 0;    // seconds of buffered jump input
     return tex;
   }
 
-  // Helper: make a procedural grass-like texture using simple Perlin-style fBm
-  function makeGrassTexture({ size = 1024, scale = 8, octaves = 5, persistence = 0.5, lacunarity = 2.0, seed = 1337 } = {}) {
+  // Helper: make a fast procedural grass-like texture using optimized generation
+  function makeGrassTexture({ size = 512, scale = 6, octaves = 3, persistence = 0.5, lacunarity = 2.0, seed = 1337 } = {}) {
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = size;
     const ctx = canvas.getContext('2d');
-    const img = ctx.createImageData(size, size);
-    const data = img.data;
-
-    // Seeded PRNG (Mulberry32)
-    function mulberry32(a){return function(){let t=a+=0x6D2B79F5;t=Math.imul(t^t>>>15,t|1);t^=t+Math.imul(t^t>>>7,t|61);return ((t^t>>>14)>>>0)/4294967295;}}
-    const rand = mulberry32(seed >>> 0);
-
-    // Build permutation for Perlin
-    const p = new Uint8Array(512);
-    const perm = new Uint8Array(256);
-    for (let i=0;i<256;i++) perm[i]=i;
-    // Fisher-Yates shuffle with rand
-    for (let i=255;i>0;i--){const j=(rand()* (i+1))|0; const tmp=perm[i]; perm[i]=perm[j]; perm[j]=tmp;}
-    for (let i=0;i<512;i++) p[i]=perm[i & 255];
-
-    function fade(t){return t*t*t*(t*(t*6-15)+10);} // 6t^5-15t^4+10t^3
-    function lerp(a,b,t){return a+(b-a)*t;}
-    function grad(hash,x,y){
-      const h = hash & 3; // 4 gradients
-      const u = h < 2 ? x : y;
-      const v = h < 2 ? y : x;
-      return ((h & 1) ? -u : u) + ((h & 2) ? -2*v : 2*v);
-    }
-    function perlin2(x,y){
-      const X = Math.floor(x) & 255;
-      const Y = Math.floor(y) & 255;
-      const xf = x - Math.floor(x);
-      const yf = y - Math.floor(y);
-      const u = fade(xf), v = fade(yf);
-      const aa = p[X + p[Y]], ab = p[X + p[Y+1]];
-      const ba = p[X+1 + p[Y]], bb = p[X+1 + p[Y+1]];
-      const x1 = lerp(grad(aa, xf,   yf),   grad(ba, xf-1, yf),   u);
-      const x2 = lerp(grad(ab, xf,   yf-1), grad(bb, xf-1, yf-1), u);
-      return lerp(x1, x2, v) * 0.5 + 0.5; // [0,1]
-    }
-
-    // Fractal Brownian Motion
-    function fbm(x,y){
-      let amp = 1.0;
-      let freq = 1.0;
-      let sum = 0.0;
-      let norm = 0.0;
-      for (let o=0;o<octaves;o++){
-        sum += amp * perlin2(x*freq, y*freq);
-        norm += amp;
-        amp *= persistence;
-        freq *= lacunarity;
+    
+    if (settings.fastTextures) {
+      // Fast gradient-based grass texture for better performance
+      const gradient = ctx.createLinearGradient(0, 0, size, size);
+      gradient.addColorStop(0, '#2a6b2e');
+      gradient.addColorStop(0.3, '#35823a');
+      gradient.addColorStop(0.7, '#4a9d4f');
+      gradient.addColorStop(1, '#2a6b2e');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, size, size);
+      
+      // Add simple noise pattern
+      ctx.globalCompositeOperation = 'overlay';
+      for(let i = 0; i < size * 0.1; i++) {
+        const x = Math.random() * size;
+        const y = Math.random() * size;
+        const alpha = 0.1 + Math.random() * 0.1;
+        ctx.fillStyle = `rgba(${120 + Math.random() * 40}, ${150 + Math.random() * 50}, ${80 + Math.random() * 40}, ${alpha})`;
+        ctx.fillRect(x, y, 2 + Math.random() * 3, 2 + Math.random() * 3);
       }
-      return sum / norm; // [0,1]
-    }
+      ctx.globalCompositeOperation = 'source-over';
+    } else {
+      // Original complex texture generation for high-end systems
+      const img = ctx.createImageData(size, size);
+      const data = img.data;
 
-    // Generate pixels
-    const base1 = [26, 94, 32];   // darker green
-    const base2 = [38, 122, 44];  // lighter green
-    const highlight = [78, 168, 80]; // highlights for brighter blades
+      // Seeded PRNG (Mulberry32)
+      function mulberry32(a){return function(){let t=a+=0x6D2B79F5;t=Math.imul(t^t>>>15,t|1);t^=t+Math.imul(t^t>>>7,t|61);return ((t^t>>>14)>>>0)/4294967295;}}
+      const rand = mulberry32(seed >>> 0);
 
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
-        // Two layers: main fBm and a very low-frequency variation for patches
-        const nx = (x / size) * scale;
-        const ny = (y / size) * scale;
-        const v = fbm(nx, ny); // [0,1]
-        const patch = fbm(nx * 0.15, ny * 0.15); // big patches
+      // Build permutation for Perlin
+      const p = new Uint8Array(512);
+      const perm = new Uint8Array(256);
+      for (let i=0;i<256;i++) perm[i]=i;
+      // Fisher-Yates shuffle with rand
+      for (let i=255;i>0;i--){const j=(rand()* (i+1))|0; const tmp=perm[i]; perm[i]=perm[j]; perm[j]=tmp;}
+      for (let i=0;i<512;i++) p[i]=perm[i & 255];
 
-        // Blend base greens by v, then add subtle patch-based variation
-        const t = v;
-        let r = base1[0] + (base2[0] - base1[0]) * t;
-        let g = base1[1] + (base2[1] - base1[1]) * t;
-        let b = base1[2] + (base2[2] - base1[2]) * t;
-
-        // Add highlights sparingly where noise is highest
-        const h = Math.max(0, v - 0.75) / 0.25; // 0..1 when v in [0.75,1]
-        r = r + (highlight[0] - r) * h * 0.6;
-        g = g + (highlight[1] - g) * h * 0.6;
-        b = b + (highlight[2] - b) * h * 0.6;
-
-        // Patch tinting (slightly desaturate in patches)
-        const patchAmt = (patch - 0.5) * 0.2; // -0.1..0.1
-        r *= (1.0 - 0.06 + patchAmt);
-        g *= (1.0 + 0.04 + patchAmt);
-        b *= (1.0 - 0.06 + patchAmt);
-
-        const idx = (y * size + x) * 4;
-        data[idx + 0] = Math.max(0, Math.min(255, r));
-        data[idx + 1] = Math.max(0, Math.min(255, g));
-        data[idx + 2] = Math.max(0, Math.min(255, b));
-        data[idx + 3] = 255;
+      function fade(t){return t*t*t*(t*(t*6-15)+10);} // 6t^5-15t^4+10t^3
+      function lerp(a,b,t){return a+(b-a)*t;}
+      function grad(hash,x,y){
+        const h = hash & 3; // 4 gradients
+        const u = h < 2 ? x : y;
+        const v = h < 2 ? y : x;
+        return ((h & 1) ? -u : u) + ((h & 2) ? -2*v : 2*v);
       }
-    }
+      function perlin2(x,y){
+        const X = Math.floor(x) & 255;
+        const Y = Math.floor(y) & 255;
+        const xf = x - Math.floor(x);
+        const yf = y - Math.floor(y);
+        const u = fade(xf), v = fade(yf);
+        const aa = p[X + p[Y]], ab = p[X + p[Y+1]];
+        const ba = p[X+1 + p[Y]], bb = p[X+1 + p[Y+1]];
+        const x1 = lerp(grad(aa, xf,   yf),   grad(ba, xf-1, yf),   u);
+        const x2 = lerp(grad(ab, xf,   yf-1), grad(bb, xf-1, yf-1), u);
+        return lerp(x1, x2, v) * 0.5 + 0.5; // [0,1]
+      }
 
-    ctx.putImageData(img, 0, 0);
+      // Fractal Brownian Motion
+      function fbm(x,y){
+        let amp = 1.0;
+        let freq = 1.0;
+        let sum = 0.0;
+        let norm = 0.0;
+        for (let o=0;o<octaves;o++){
+          sum += amp * perlin2(x*freq, y*freq);
+          norm += amp;
+          amp *= persistence;
+          freq *= lacunarity;
+        }
+        return sum / norm; // [0,1]
+      }
+
+      // Generate pixels
+      const base1 = [26, 94, 32];   // darker green
+      const base2 = [38, 122, 44];  // lighter green
+      const highlight = [78, 168, 80]; // highlights for brighter blades
+
+      for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+          // Two layers: main fBm and a very low-frequency variation for patches
+          const nx = (x / size) * scale;
+          const ny = (y / size) * scale;
+          const v = fbm(nx, ny); // [0,1]
+          const patch = fbm(nx * 0.15, ny * 0.15); // big patches
+
+          // Blend base greens by v, then add subtle patch-based variation
+          const t = v;
+          let r = base1[0] + (base2[0] - base1[0]) * t;
+          let g = base1[1] + (base2[1] - base1[1]) * t;
+          let b = base1[2] + (base2[2] - base1[2]) * t;
+
+          // Add highlights sparingly where noise is highest
+          const h = Math.max(0, v - 0.75) / 0.25; // 0..1 when v in [0.75,1]
+          r = r + (highlight[0] - r) * h * 0.6;
+          g = g + (highlight[1] - g) * h * 0.6;
+          b = b + (highlight[2] - b) * h * 0.6;
+
+          // Patch tinting (slightly desaturate in patches)
+          const patchAmt = (patch - 0.5) * 0.2; // -0.1..0.1
+          r *= (1.0 - 0.06 + patchAmt);
+          g *= (1.0 + 0.04 + patchAmt);
+          b *= (1.0 - 0.06 + patchAmt);
+
+          const idx = (y * size + x) * 4;
+          data[idx + 0] = Math.max(0, Math.min(255, r));
+          data[idx + 1] = Math.max(0, Math.min(255, g));
+          data[idx + 2] = Math.max(0, Math.min(255, b));
+          data[idx + 3] = 255;
+        }
+      }
+
+      ctx.putImageData(img, 0, 0);
+    }
 
     const tex = new THREE.CanvasTexture(canvas);
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
@@ -327,7 +355,7 @@ let jumpBuffer = 0;    // seconds of buffered jump input
   posAttr.needsUpdate = true;
   groundGeo.computeVertexNormals();
 
-const groundTex = makeGrassTexture({ size: 256, scale: 6, octaves: 5, persistence: 0.5, lacunarity: 2.0, seed: 1337 });
+const groundTex = makeGrassTexture({ size: 256, scale: 6, octaves: 3, persistence: 0.5, lacunarity: 2.0, seed: 1337 });
   const tiles = groundSize / 10; // number of repeats across the ground
   groundTex.repeat.set(tiles, tiles);
 const groundMat = new THREE.MeshLambertMaterial({ map: groundTex });
@@ -337,39 +365,107 @@ const groundMat = new THREE.MeshLambertMaterial({ map: groundTex });
 
   // Tree trunk colliders for simple cylindrical collisions
   const treeColliders = [];
+  
+  // Spatial partitioning grid for optimized collision detection
+  let spatialGrid = null;
+  const gridSize = 50; // grid cell size in world units
+  
+  function initSpatialGrid() {
+    if (!settings.spatialCollision) return;
+    
+    spatialGrid = new Map();
+    
+    // Populate spatial grid with tree colliders
+    for (const collider of treeColliders) {
+      const gridX = Math.floor(collider.x / gridSize);
+      const gridZ = Math.floor(collider.z / gridSize);
+      const key = `${gridX},${gridZ}`;
+      
+      if (!spatialGrid.has(key)) {
+        spatialGrid.set(key, []);
+      }
+      spatialGrid.get(key).push(collider);
+    }
+  }
+  
+  function getNearbyColliders(x, z) {
+    if (!spatialGrid) return treeColliders; // fallback to all colliders
+    
+    const nearby = [];
+    const gridX = Math.floor(x / gridSize);
+    const gridZ = Math.floor(z / gridSize);
+    
+    // Check 3x3 grid around player position
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const key = `${gridX + dx},${gridZ + dz}`;
+        const cellColliders = spatialGrid.get(key);
+        if (cellColliders) {
+          nearby.push(...cellColliders);
+        }
+      }
+    }
+    
+    return nearby;
+  }
 
-      // Bark texture generator: subtle vertical lines to suggest bark
+      // Optimized bark texture generator for better performance
       function makeBarkTexture(opts={}){
         const w = opts.w || 64, h = opts.h || 256;
         const base = opts.base || '#8B4513';
         const dark = opts.dark || '#6f3612';
         const light = opts.light || '#A0522D';
-        const lines = opts.lines || 18;
+        const lines = settings.fastTextures ? (opts.lines || 9) : (opts.lines || 18); // fewer lines for fast mode
         let s = (opts.seed == null ? 1234 : opts.seed) | 0; // mutable seed
+        
         function rnd() {
           // LCG PRNG for stable, fast pseudo-randoms
           s = (s * 1664525 + 1013904223) >>> 0;
           return s / 4294967296;
         }
-        const c = document.createElement('canvas'); c.width = w; c.height = h; const ctx = c.getContext('2d');
-        // base fill
-        ctx.fillStyle = base; ctx.fillRect(0,0,w,h);
-        // subtle vertical lines
-        for (let i=0;i<lines;i++){
-          const x = Math.floor(rnd()*w);
-          const width = 1 + Math.floor(rnd()*1);
-          ctx.globalAlpha = 0.15 + rnd()*0.15;
+        
+        const c = document.createElement('canvas'); 
+        c.width = w; c.height = h; 
+        const ctx = c.getContext('2d');
+        
+        if (settings.fastTextures) {
+          // Fast gradient-based bark texture
+          const gradient = ctx.createLinearGradient(0, 0, w, 0);
+          gradient.addColorStop(0, base);
+          gradient.addColorStop(0.5, dark);
+          gradient.addColorStop(1, base);
+          ctx.fillStyle = gradient;
+          ctx.fillRect(0, 0, w, h);
+          
+          // Add fewer vertical lines for performance
+          ctx.globalAlpha = 0.3;
           ctx.fillStyle = dark;
-          ctx.fillRect(x, 0, width, h);
+          for (let i = 0; i < lines; i++) {
+            const x = Math.floor(rnd() * w);
+            ctx.fillRect(x, 0, 1, h);
+          }
+          ctx.globalAlpha = 1;
+        } else {
+          // Original detailed bark texture
+          ctx.fillStyle = base; ctx.fillRect(0,0,w,h);
+          // subtle vertical lines
+          for (let i=0;i<lines;i++){
+            const x = Math.floor(rnd()*w);
+            const width = 1 + Math.floor(rnd()*1);
+            ctx.globalAlpha = 0.15 + rnd()*0.15;
+            ctx.fillStyle = dark;
+            ctx.fillRect(x, 0, width, h);
+          }
+          // light streaks
+          for (let i=0;i<Math.floor(lines*0.5);i++){
+            const x = Math.floor(rnd()*w);
+            ctx.globalAlpha = 0.08 + rnd()*0.08;
+            ctx.fillStyle = light;
+            ctx.fillRect(x, 0, 1, h);
+          }
+          ctx.globalAlpha = 1;
         }
-        // light streaks
-        for (let i=0;i<Math.floor(lines*0.5);i++){
-          const x = Math.floor(rnd()*w);
-          ctx.globalAlpha = 0.08 + rnd()*0.08;
-          ctx.fillStyle = light;
-          ctx.fillRect(x, 0, 1, h);
-        }
-        ctx.globalAlpha = 1;
+        
         const tex = new THREE.CanvasTexture(c);
         tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
         tex.anisotropy = settings.reducedAnisotropy ? 2 : 4;
@@ -384,12 +480,22 @@ const groundMat = new THREE.MeshLambertMaterial({ map: groundTex });
         const minX = -groundSize*0.49, maxX = groundSize*0.49;
         const minZ = -groundSize*0.49, maxZ = groundSize*0.49;
 
-        // Geometries
-  const trunkGeo = new THREE.CylinderGeometry(0.12, 0.32, 1, 10);
-  const branchGeo = new THREE.CylinderGeometry(0.03, 0.1, 1, 8);
-  const rootGeo = new THREE.CylinderGeometry(0.008, 0.06, 0.5, 6);
-  const leafGeo = new THREE.IcosahedronGeometry(1.2, 1);
-  const leafHiGeo = new THREE.IcosahedronGeometry(0.8, 1);
+        // Optimized geometries for performance 
+        const trunkGeo = settings.simplifiedTrees ? 
+          new THREE.CylinderGeometry(0.12, 0.32, 1, 6) :  // simplified: 6 segments vs 10
+          new THREE.CylinderGeometry(0.12, 0.32, 1, 10);
+        const branchGeo = settings.simplifiedTrees ? 
+          new THREE.CylinderGeometry(0.03, 0.1, 1, 5) :   // simplified: 5 segments vs 8
+          new THREE.CylinderGeometry(0.03, 0.1, 1, 8);
+        const rootGeo = settings.simplifiedTrees ? 
+          new THREE.CylinderGeometry(0.008, 0.06, 0.5, 4) : // simplified: 4 segments vs 6
+          new THREE.CylinderGeometry(0.008, 0.06, 0.5, 6);
+        const leafGeo = settings.simplifiedTrees ? 
+          new THREE.IcosahedronGeometry(1.2, 0) :           // simplified: no subdivision
+          new THREE.IcosahedronGeometry(1.2, 1);
+        const leafHiGeo = settings.simplifiedTrees ? 
+          new THREE.IcosahedronGeometry(0.8, 0) :           // simplified: no subdivision
+          new THREE.IcosahedronGeometry(0.8, 1);
 
         // Materials
         const barkTex = makeBarkTexture({ seed: 5678 });
@@ -399,10 +505,15 @@ const groundMat = new THREE.MeshLambertMaterial({ map: groundTex });
         const rootMat = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
         const leavesMat = new THREE.MeshLambertMaterial({ color: 0x228B22, flatShading: true });
         const leavesHiMat = new THREE.MeshLambertMaterial({ color: 0x42d66a, flatShading: true });
-        const ropeMat = new THREE.MeshLambertMaterial({ color: 0x5a4632 });
-        const seatMat = new THREE.MeshLambertMaterial({ color: 0x8B5A2B });
-  const ropeGeo = new THREE.CylinderGeometry(0.01, 0.01, 1.2, 6);
-  const seatGeo = new THREE.BoxGeometry(0.7, 0.06, 0.32);
+        
+        // Only create swing materials/geometries if not in simplified mode
+        let ropeMat, seatMat, ropeGeo, seatGeo;
+        if (!settings.simplifiedTrees) {
+          ropeMat = new THREE.MeshLambertMaterial({ color: 0x5a4632 });
+          seatMat = new THREE.MeshLambertMaterial({ color: 0x8B5A2B });
+          ropeGeo = new THREE.CylinderGeometry(0.01, 0.01, 1.2, 6);
+          seatGeo = new THREE.BoxGeometry(0.7, 0.06, 0.32);
+        }
 
         // Accumulators of transforms
         const trunkMs = [], branchMs = [], rootMs = [], leafMs = [], leafHiMs = [], ropeMs = [], seatMs = [];
@@ -433,8 +544,8 @@ const groundMat = new THREE.MeshLambertMaterial({ map: groundTex });
           // Add a cylindrical collider centered at trunk base (XZ)
           treeColliders.push({ x, z, r: trunkRBot * 1.05 });
 
-          // Roots (3-4 small flares)
-          const rootCount = 4 + Math.floor(Math.random()*2);
+          // Roots (simplified for performance)
+          const rootCount = settings.simplifiedTrees ? 2 : (4 + Math.floor(Math.random()*2));
           for (let r=0; r<rootCount; r++){
             const ang = yaw + r*(Math.PI*2/rootCount) + Math.random()*0.5;
             const tilt = 0.8 + Math.random()*0.2; // lean outward
@@ -445,8 +556,8 @@ const groundMat = new THREE.MeshLambertMaterial({ map: groundTex });
             rootMs.push(m.clone());
           }
 
-          // Branches (2-3 large near top, angled upward/outward)
-          const branchNum = 2 + Math.floor(Math.random()*2);
+          // Branches (simplified for performance)
+          const branchNum = settings.simplifiedTrees ? 1 : (2 + Math.floor(Math.random()*2));
           const branchLen = THREE.MathUtils.lerp(0.9, 1.4, Math.random());
           const baseY = y + trunkH * THREE.MathUtils.lerp(0.75, 0.9, Math.random());
           const branchDirs = [];
@@ -465,9 +576,9 @@ const groundMat = new THREE.MeshLambertMaterial({ map: groundTex });
             branchDirs.push({ pos: new THREE.Vector3(x, baseY, z), dir: dir.clone(), len: branchLen });
           }
 
-          // Leaf canopy: clusters around top and branch tips
+          // Leaf canopy: simplified clusters for performance
           const canopyCenter = new THREE.Vector3(x, y + trunkH*1.05, z);
-          const clusterCount = 5 + Math.floor(Math.random()*2); // 5-6 clusters (more mass)
+          const clusterCount = settings.simplifiedTrees ? 3 : (5 + Math.floor(Math.random()*2)); // fewer clusters
           for (let cIdx=0; cIdx<clusterCount; cIdx++){
             // Choose a base position: either around canopy center or near a branch tip
             let center;
@@ -483,8 +594,8 @@ const groundMat = new THREE.MeshLambertMaterial({ map: groundTex });
             q.set(0,0,0,1);
             m.compose(center, q, new THREE.Vector3(scale, scale, scale));
             leafMs.push(m.clone());
-            // 40% chance to add a smaller highlight cluster slightly above
-            if (Math.random() < 0.4){
+            // Reduced highlight clusters for performance
+            if (!settings.simplifiedTrees && Math.random() < 0.4){
               const hCenter = center.clone().add(new THREE.Vector3(0, 0.3 + Math.random()*0.2, 0));
               const hScale = scale * THREE.MathUtils.lerp(0.6, 0.9, Math.random());
               m.compose(hCenter, q, new THREE.Vector3(hScale, hScale, hScale));
@@ -492,8 +603,8 @@ const groundMat = new THREE.MeshLambertMaterial({ map: groundTex });
             }
           }
 
-          // Optional swing on ~12% of trees: attach under first branch or canopy center
-          if (Math.random() < 0.12){
+          // Optional swing (skip in simplified mode for performance)
+          if (!settings.simplifiedTrees && Math.random() < 0.12){
             const pivot = (branchDirs[0]) ? branchDirs[0].pos.clone().addScaledVector(branchDirs[0].dir, branchDirs[0].len) : canopyCenter.clone();
             // Two ropes spaced sideways
             const side = new THREE.Vector3(1,0,0).applyAxisAngle(new THREE.Vector3(0,1,0), yaw);
@@ -561,6 +672,9 @@ const groundMat = new THREE.MeshLambertMaterial({ map: groundTex });
           scene.add(seats);
         }
       })();
+      
+      // Initialize spatial partitioning for optimized collision detection
+      initSpatialGrid();
 
 // Simple first-person hands (box placeholders)
 const hands = {
@@ -859,12 +973,13 @@ fwdVec.set(-Math.sin(yawAngle), 0, -Math.cos(yawAngle));
       velocity.set(0,0,0);
     }
     yaw.position.addScaledVector(velocity, dt);
-    // Resolve collisions against tree trunks (cylindrical XZ)
-    if (treeColliders.length) {
+    // Resolve collisions against tree trunks (cylindrical XZ) - optimized with spatial partitioning
+    const nearbyColliders = settings.spatialCollision ? getNearbyColliders(yaw.position.x, yaw.position.z) : treeColliders;
+    if (nearbyColliders.length) {
       const px = yaw.position.x, pz = yaw.position.z;
       const pr = settings.playerRadius;
-      for (let i=0;i<treeColliders.length;i++){
-        const c = treeColliders[i];
+      for (let i=0;i<nearbyColliders.length;i++){
+        const c = nearbyColliders[i];
         const dx = px - c.x; const dz = pz - c.z;
         const minR = pr + c.r;
         const d2 = dx*dx + dz*dz;
