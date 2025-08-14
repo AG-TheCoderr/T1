@@ -78,6 +78,8 @@ treeSlopeMaxY: 0.9,       // require normal.y >= this (flatter ground)
 simplifiedTrees: true,    // use simpler tree geometry
 fastTextures: true,       // use faster texture generation
 spatialCollision: true,   // use spatial partitioning for collisions
+reducedVertices: true,    // reduce geometry complexity for better performance
+optimizedAnimals: true,   // use simpler animal representations
 // Adaptive quality system
 adaptiveQuality: true,    // enable automatic quality adjustments
 lowFpsThreshold: 45,      // FPS below which quality reduces
@@ -965,12 +967,24 @@ const groundMat = new THREE.MeshLambertMaterial({ map: groundTex });
         
         createMesh() {
           const config = this.config;
-          const geometry = new THREE.BoxGeometry(config.size.x, config.size.y, config.size.z);
+          
+          // Use optimized geometry based on performance settings
+          const segments = settings.optimizedAnimals ? 4 : 8; // reduced segments for performance
+          let geometry;
+          
+          if (settings.reducedVertices) {
+            // Use simple box geometry for better performance
+            geometry = new THREE.BoxGeometry(config.size.x, config.size.y, config.size.z);
+          } else {
+            // Use slightly more detailed geometry for quality
+            geometry = new THREE.BoxGeometry(config.size.x, config.size.y, config.size.z, 2, 2, 2);
+          }
+          
           const material = new THREE.MeshLambertMaterial({ color: config.color });
           this.mesh = new THREE.Mesh(geometry, material);
           this.mesh.position.copy(this.position);
-          this.mesh.castShadow = true;
-          this.mesh.receiveShadow = true;
+          this.mesh.castShadow = !settings.reducedVertices; // disable shadows for performance if needed
+          this.mesh.receiveShadow = !settings.reducedVertices;
           scene.add(this.mesh);
         }
         
@@ -1365,6 +1379,233 @@ const groundMat = new THREE.MeshLambertMaterial({ map: groundTex });
       }
       
       createVillageMeshes();
+
+      // === WEATHER SYSTEM ===
+      // Rain and weather effects with infinite generation
+      const weather = {
+        isRaining: false,
+        rainIntensity: 0,
+        rainTimer: 0,
+        rainDuration: 30, // seconds
+        rainCooldown: 120, // seconds between rain events
+        lastRainTime: 0,
+        rainDroplets: []
+      };
+      
+      function updateWeather(deltaTime) {
+        weather.rainTimer += deltaTime;
+        
+        // Check if it should start raining
+        if (!weather.isRaining && weather.rainTimer > weather.rainCooldown) {
+          if (Math.random() < 0.3) { // 30% chance to rain
+            startRain();
+          }
+          weather.rainTimer = 0;
+        }
+        
+        // Update rain
+        if (weather.isRaining) {
+          weather.rainIntensity = Math.min(1.0, weather.rainIntensity + deltaTime * 2);
+          
+          // Create rain droplets
+          if (Math.random() < weather.rainIntensity * 0.5) {
+            createRainDroplet();
+          }
+          
+          // Update existing droplets
+          for (let i = weather.rainDroplets.length - 1; i >= 0; i--) {
+            const droplet = weather.rainDroplets[i];
+            droplet.position.y -= deltaTime * 15; // fall speed
+            
+            if (droplet.position.y < enhancedTerrainHeightAt(droplet.position.x, droplet.position.z)) {
+              // Droplet hit ground - trigger growth
+              triggerGrowthNearby(droplet.position.x, droplet.position.z);
+              scene.remove(droplet.mesh);
+              droplet.mesh.geometry.dispose();
+              droplet.mesh.material.dispose();
+              weather.rainDroplets.splice(i, 1);
+            }
+          }
+          
+          // Stop rain after duration
+          if (weather.rainTimer > weather.rainDuration) {
+            stopRain();
+          }
+        }
+      }
+      
+      function startRain() {
+        weather.isRaining = true;
+        weather.rainIntensity = 0;
+        weather.rainTimer = 0;
+        console.log("Rain started! New growth will occur where droplets land.");
+      }
+      
+      function stopRain() {
+        weather.isRaining = false;
+        weather.rainIntensity = 0;
+        weather.rainTimer = 0;
+        weather.lastRainTime = Date.now();
+        
+        // Clear remaining droplets
+        for (const droplet of weather.rainDroplets) {
+          scene.remove(droplet.mesh);
+          droplet.mesh.geometry.dispose();
+          droplet.mesh.material.dispose();
+        }
+        weather.rainDroplets = [];
+        
+        console.log("Rain stopped. Growth effects will continue.");
+      }
+      
+      function createRainDroplet() {
+        // Create droplet near player
+        const playerPos = yaw.position;
+        const droplet = {
+          position: new THREE.Vector3(
+            playerPos.x + (Math.random() - 0.5) * 50,
+            playerPos.y + 20 + Math.random() * 10,
+            playerPos.z + (Math.random() - 0.5) * 50
+          ),
+          mesh: null
+        };
+        
+        // Simple droplet visualization
+        const geometry = new THREE.SphereGeometry(0.05, 4, 4);
+        const material = new THREE.MeshLambertMaterial({ color: 0x87CEEB, transparent: true, opacity: 0.6 });
+        droplet.mesh = new THREE.Mesh(geometry, material);
+        droplet.mesh.position.copy(droplet.position);
+        scene.add(droplet.mesh);
+        
+        weather.rainDroplets.push(droplet);
+      }
+      
+      function triggerGrowthNearby(x, z) {
+        // Infinite generation: spawn new trees/plants where rain hits
+        const biome = getBiomeAt(x, z, enhancedTerrainHeightAt(x, z));
+        
+        if (Math.random() < 0.1) { // 10% chance to spawn new vegetation
+          // Check if location is suitable (not too close to existing trees)
+          let tooClose = false;
+          for (const collider of treeColliders) {
+            const dist = Math.sqrt((x - collider.x) ** 2 + (z - collider.z) ** 2);
+            if (dist < collider.r + 3) {
+              tooClose = true;
+              break;
+            }
+          }
+          
+          if (!tooClose) {
+            spawnNewVegetation(x, z, biome);
+          }
+        }
+        
+        // Also chance to spawn new animals
+        if (Math.random() < 0.05) { // 5% chance
+          spawnNewAnimal(x, z, biome);
+        }
+      }
+      
+      function spawnNewVegetation(x, z, biome) {
+        // Create a new tree/plant based on biome
+        const y = enhancedTerrainHeightAt(x, z);
+        const normal = terrainNormalAt(x, z);
+        
+        if (normal.y < 0.8) return; // too steep
+        
+        // Simple new tree (basic representation)
+        const trunkHeight = 2 + Math.random() * 3;
+        const trunkGeometry = new THREE.CylinderGeometry(0.1, 0.2, trunkHeight, 6);
+        const trunkMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+        const trunkMesh = new THREE.Mesh(trunkGeometry, trunkMaterial);
+        trunkMesh.position.set(x, y + trunkHeight / 2, z);
+        scene.add(trunkMesh);
+        
+        // Add foliage
+        const foliageGeometry = new THREE.SphereGeometry(1.5, 8, 6);
+        const foliageColor = biome === 'desert' ? 0x228B22 : (biome === 'mountains' ? 0x006400 : 0x32CD32);
+        const foliageMaterial = new THREE.MeshLambertMaterial({ color: foliageColor });
+        const foliageMesh = new THREE.Mesh(foliageGeometry, foliageMaterial);
+        foliageMesh.position.set(x, y + trunkHeight + 1, z);
+        scene.add(foliageMesh);
+        
+        // Add to collision detection
+        treeColliders.push({ x, z, r: 0.25 });
+        
+        console.log(`New ${biome} vegetation grew at (${x.toFixed(1)}, ${z.toFixed(1)})`);
+      }
+      
+      function spawnNewAnimal(x, z, biome) {
+        const biomeConfig = biomes[biome];
+        if (biomeConfig && biomeConfig.animalTypes.length > 0) {
+          const animalType = biomeConfig.animalTypes[Math.floor(Math.random() * biomeConfig.animalTypes.length)];
+          const newAnimal = new Animal(animalType, x, z);
+          animals.push(newAnimal);
+          console.log(`New ${animalType} spawned in ${biome} biome`);
+        }
+      }
+
+      // === PERFORMANCE OPTIMIZATIONS ===
+      // Optimize hand animations for better performance
+      const handAnimationCache = {
+        extendTime: 0.08,  // reduced from 0.12 for faster animation
+        holdTime: 0.06,    // reduced from 0.08
+        retractTime: 0.12, // reduced from 0.16
+        lastUpdate: 0
+      };
+      
+      // Optimized hand update function
+      function fastUpdateHands(dt) {
+        // Skip hand updates if not needed (performance optimization)
+        handAnimationCache.lastUpdate += dt;
+        if (handAnimationCache.lastUpdate < 0.016) return; // ~60fps cap for hand updates
+        handAnimationCache.lastUpdate = 0;
+        
+        for (const key of ['left','right']) {
+          const h = hands[key];
+          if (!h.mesh) continue;
+          
+          h.timer += dt;
+          
+          switch (h.state) {
+            case 'extending':
+              const extendProgress = Math.min(1, h.timer / handAnimationCache.extendTime);
+              const extendEase = extendProgress * extendProgress; // simpler easing
+              if (h.mesh.position && h.basePos && h.targetPos) {
+                h.mesh.position.x = h.basePos.x + (h.targetPos.x - h.basePos.x) * extendEase;
+                h.mesh.position.y = h.basePos.y + (h.targetPos.y - h.basePos.y) * extendEase;
+                h.mesh.position.z = h.basePos.z + (h.targetPos.z - h.basePos.z) * extendEase;
+              }
+              if (extendProgress >= 1) {
+                h.state = 'hold';
+                h.timer = 0;
+              }
+              break;
+              
+            case 'hold':
+              if (h.timer >= handAnimationCache.holdTime) {
+                h.state = 'retracting';
+                h.timer = 0;
+              }
+              break;
+              
+            case 'retracting':
+              const retractProgress = Math.min(1, h.timer / handAnimationCache.retractTime);
+              const retractEase = retractProgress * retractProgress;
+              if (h.mesh.position && h.basePos && h.targetPos) {
+                h.mesh.position.x = h.targetPos.x + (h.basePos.x - h.targetPos.x) * retractEase;
+                h.mesh.position.y = h.targetPos.y + (h.basePos.y - h.targetPos.y) * retractEase;
+                h.mesh.position.z = h.targetPos.z + (h.basePos.z - h.targetPos.z) * retractEase;
+              }
+              if (retractProgress >= 1) {
+                h.state = 'idle';
+                h.timer = 0;
+                h.mesh.visible = false;
+              }
+              break;
+          }
+        }
+      }
 
 // Simple first-person hands (box placeholders)
 const hands = {
@@ -1848,6 +2089,12 @@ if (yaw.position.y <= groundY) {
 
     // Update animals
     updateAnimals(dt);
+
+    // Update weather system
+    updateWeather(dt);
+
+    // Update hands with optimization
+    fastUpdateHands(dt);
 
     renderer.render(scene, camera);
     requestAnimationFrame(animate);
