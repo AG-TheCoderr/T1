@@ -349,16 +349,162 @@ let jumpBuffer = 0;    // seconds of buffered jump input
     return val;
   }
 
-  // Procedural terrain mesh
+  // === BIOME SYSTEM ===
+  // Enhanced terrain generation with multiple biomes
+  const biomes = {
+    grassland: {
+      color: 0x90EE90,
+      treeTypes: ['oak', 'birch'],
+      treeDensity: 0.7,
+      animalTypes: ['cow', 'sheep', 'chicken', 'pig'],
+      elevation: { min: 0, max: 5 }
+    },
+    forest: {
+      color: 0x228B22,
+      treeTypes: ['oak', 'pine', 'birch'],
+      treeDensity: 1.2,
+      animalTypes: ['pig', 'chicken', 'bird', 'lion'],
+      elevation: { min: 3, max: 12 }
+    },
+    mountains: {
+      color: 0x8B7355,
+      treeTypes: ['pine'],
+      treeDensity: 0.3,
+      animalTypes: ['bird'],
+      elevation: { min: 15, max: 30 }
+    },
+    savanna: {
+      color: 0xDEB887,
+      treeTypes: ['acacia'],
+      treeDensity: 0.4,
+      animalTypes: ['lion', 'elephant', 'rhinoceros'],
+      elevation: { min: 0, max: 8 }
+    },
+    desert: {
+      color: 0xF4A460,
+      treeTypes: ['cactus'],
+      treeDensity: 0.1,
+      animalTypes: ['bird'],
+      elevation: { min: 0, max: 3 }
+    }
+  };
+
+  // Function to determine biome based on position and height
+  function getBiomeAt(x, z, height) {
+    // Use simple noise to create biome regions (using Math.sin for simplicity)
+    const biomeNoise = Math.sin(x * 0.001) * Math.cos(z * 0.001);
+    const moistureNoise = Math.sin(x * 0.002 + 1000) * Math.cos(z * 0.002 + 1000);
+    
+    // Height-based biome selection
+    if (height > 15) return 'mountains';
+    if (height > 12 && biomeNoise > 0.3) return 'forest';
+    if (height < 2 && biomeNoise < -0.3) return 'desert';
+    if (moistureNoise < -0.2) return 'savanna';
+    if (moistureNoise > 0.3) return 'forest';
+    
+    return 'grassland'; // default
+  }
+
+  // === LAKE AND WATER SYSTEM ===
+  // Add lakes and water bodies to the terrain
+  const lakes = [];
+  const waterLevel = 1.0; // meters above sea level
+  
+  function generateLakes() {
+    const lakeCount = 5 + Math.floor(Math.random() * 3);
+    
+    for (let i = 0; i < lakeCount; i++) {
+      const lake = {
+        center: {
+          x: (Math.random() - 0.5) * groundSize * 0.6,
+          z: (Math.random() - 0.5) * groundSize * 0.6
+        },
+        radius: 8 + Math.random() * 15,
+        depth: 2 + Math.random() * 3
+      };
+      
+      // Ensure minimum distance between lakes
+      let tooClose = false;
+      for (const existingLake of lakes) {
+        const dist = Math.sqrt(
+          (lake.center.x - existingLake.center.x) ** 2 + 
+          (lake.center.z - existingLake.center.z) ** 2
+        );
+        if (dist < lake.radius + existingLake.radius + 10) {
+          tooClose = true;
+          break;
+        }
+      }
+      
+      if (!tooClose) {
+        lakes.push(lake);
+        
+        // Add islands in larger lakes
+        if (lake.radius > 15 && Math.random() < 0.6) {
+          const island = {
+            center: {
+              x: lake.center.x + (Math.random() - 0.5) * lake.radius * 0.6,
+              z: lake.center.z + (Math.random() - 0.5) * lake.radius * 0.6
+            },
+            radius: 2 + Math.random() * 4,
+            height: 1 + Math.random() * 2
+          };
+          lake.island = island;
+        }
+      }
+    }
+    
+    console.log(`Generated ${lakes.length} lakes with some containing islands`);
+  }
+  
+  // Enhanced terrain height function that includes lakes
+  function enhancedTerrainHeightAt(x, z) {
+    let height = terrainHeightAt(x, z);
+    
+    // Check if position is in a lake
+    for (const lake of lakes) {
+      const distToLake = Math.sqrt(
+        (x - lake.center.x) ** 2 + (z - lake.center.z) ** 2
+      );
+      
+      if (distToLake < lake.radius) {
+        // Inside lake - lower the terrain
+        const lakeInfluence = 1 - (distToLake / lake.radius);
+        const lakeDepth = lakeInfluence * lake.depth;
+        height = Math.min(height, waterLevel - lakeDepth);
+        
+        // Check for island
+        if (lake.island) {
+          const distToIsland = Math.sqrt(
+            (x - lake.island.center.x) ** 2 + (z - lake.island.center.z) ** 2
+          );
+          
+          if (distToIsland < lake.island.radius) {
+            const islandInfluence = 1 - (distToIsland / lake.island.radius);
+            const islandHeight = waterLevel + islandInfluence * lake.island.height;
+            height = Math.max(height, islandHeight);
+          }
+        }
+      }
+    }
+    
+    return height;
+  }
+
+  // Procedural terrain mesh with enhanced biomes and water
   const groundSize = 1000;
   const segments = settings.terrainSegments || 128;
   const groundGeo = new THREE.PlaneGeometry(groundSize, groundSize, segments, segments);
   groundGeo.rotateX(-Math.PI / 2);
+  
+  // Generate lakes first, then update terrain
+  generateLakes();
+  
   const posAttr = groundGeo.getAttribute('position');
   for (let i=0;i<posAttr.count;i++){
     const x = posAttr.getX(i);
     const z = posAttr.getZ(i);
-    const y = terrainHeightAt(x, z);
+    const y = enhancedTerrainHeightAt(x, z);
     posAttr.setY(i, y);
   }
   posAttr.needsUpdate = true;
@@ -1047,6 +1193,178 @@ const groundMat = new THREE.MeshLambertMaterial({ map: groundTex });
       spawnAnimals();
       
       console.log(`Spawned ${animals.length} animals in the world`);
+
+      // Create water meshes for lakes
+      function createWaterMeshes() {
+        const waterGeometry = new THREE.PlaneGeometry(1, 1);
+        waterGeometry.rotateX(-Math.PI / 2);
+        
+        const waterMaterial = new THREE.MeshLambertMaterial({ 
+          color: 0x4169E1, 
+          transparent: true, 
+          opacity: 0.7 
+        });
+        
+        for (const lake of lakes) {
+          const waterMesh = new THREE.Mesh(waterGeometry, waterMaterial);
+          waterMesh.scale.set(lake.radius * 2, 1, lake.radius * 2);
+          waterMesh.position.set(lake.center.x, waterLevel, lake.center.z);
+          scene.add(waterMesh);
+        }
+      }
+      
+      createWaterMeshes();
+
+      // === VILLAGE SYSTEM ===
+      // Generate villages with NPCs
+      const villages = [];
+      
+      function generateVillages() {
+        const villageCount = 2 + Math.floor(Math.random() * 2);
+        
+        for (let i = 0; i < villageCount; i++) {
+          let attempts = 0;
+          let validPosition = false;
+          let villageCenter;
+          
+          while (!validPosition && attempts < 50) {
+            villageCenter = {
+              x: (Math.random() - 0.5) * groundSize * 0.5,
+              z: (Math.random() - 0.5) * groundSize * 0.5
+            };
+            
+            const height = enhancedTerrainHeightAt(villageCenter.x, villageCenter.z);
+            const biome = getBiomeAt(villageCenter.x, villageCenter.z, height);
+            
+            // Villages prefer grassland and avoid mountains/desert
+            if ((biome === 'grassland' || biome === 'forest') && height < 10) {
+              // Check distance from lakes and other villages
+              let tooClose = false;
+              
+              for (const lake of lakes) {
+                const dist = Math.sqrt(
+                  (villageCenter.x - lake.center.x) ** 2 + 
+                  (villageCenter.z - lake.center.z) ** 2
+                );
+                if (dist < lake.radius + 15) {
+                  tooClose = true;
+                  break;
+                }
+              }
+              
+              for (const village of villages) {
+                const dist = Math.sqrt(
+                  (villageCenter.x - village.center.x) ** 2 + 
+                  (villageCenter.z - village.center.z) ** 2
+                );
+                if (dist < 40) {
+                  tooClose = true;
+                  break;
+                }
+              }
+              
+              if (!tooClose) {
+                validPosition = true;
+              }
+            }
+            attempts++;
+          }
+          
+          if (validPosition) {
+            const village = {
+              center: villageCenter,
+              radius: 12 + Math.random() * 8,
+              buildings: [],
+              villagers: []
+            };
+            
+            // Generate buildings
+            const buildingCount = 4 + Math.floor(Math.random() * 4);
+            for (let b = 0; b < buildingCount; b++) {
+              const angle = (b / buildingCount) * Math.PI * 2 + Math.random() * 0.5;
+              const distance = 8 + Math.random() * 6;
+              
+              const building = {
+                position: {
+                  x: village.center.x + Math.cos(angle) * distance,
+                  z: village.center.z + Math.sin(angle) * distance
+                },
+                type: Math.random() < 0.3 ? 'farm' : 'house',
+                size: { x: 3 + Math.random() * 2, y: 3 + Math.random(), z: 3 + Math.random() * 2 }
+              };
+              
+              building.position.y = enhancedTerrainHeightAt(building.position.x, building.position.z);
+              village.buildings.push(building);
+            }
+            
+            // Generate villagers
+            const villagerCount = 3 + Math.floor(Math.random() * 5);
+            for (let v = 0; v < villagerCount; v++) {
+              const villager = {
+                position: {
+                  x: village.center.x + (Math.random() - 0.5) * village.radius,
+                  z: village.center.z + (Math.random() - 0.5) * village.radius
+                },
+                type: 'villager',
+                state: 'wandering',
+                homeBuilding: village.buildings[Math.floor(Math.random() * village.buildings.length)]
+              };
+              
+              villager.position.y = enhancedTerrainHeightAt(villager.position.x, villager.position.z);
+              village.villagers.push(villager);
+            }
+            
+            villages.push(village);
+          }
+        }
+        
+        console.log(`Generated ${villages.length} villages with buildings and villagers`);
+      }
+      
+      generateVillages();
+      
+      // Create village meshes
+      function createVillageMeshes() {
+        for (const village of villages) {
+          // Create buildings
+          for (const building of village.buildings) {
+            const buildingGeometry = new THREE.BoxGeometry(
+              building.size.x, building.size.y, building.size.z
+            );
+            
+            const buildingMaterial = new THREE.MeshLambertMaterial({ 
+              color: building.type === 'farm' ? 0x8B4513 : 0xDEB887 
+            });
+            
+            const buildingMesh = new THREE.Mesh(buildingGeometry, buildingMaterial);
+            buildingMesh.position.set(
+              building.position.x, 
+              building.position.y + building.size.y / 2, 
+              building.position.z
+            );
+            buildingMesh.castShadow = true;
+            buildingMesh.receiveShadow = true;
+            scene.add(buildingMesh);
+          }
+          
+          // Create villagers (simple representation)
+          for (const villager of village.villagers) {
+            const villagerGeometry = new THREE.BoxGeometry(0.4, 1.6, 0.4);
+            const villagerMaterial = new THREE.MeshLambertMaterial({ color: 0xFFDDBB });
+            
+            const villagerMesh = new THREE.Mesh(villagerGeometry, villagerMaterial);
+            villagerMesh.position.set(
+              villager.position.x, 
+              villager.position.y + 0.8, 
+              villager.position.z
+            );
+            villagerMesh.castShadow = true;
+            scene.add(villagerMesh);
+          }
+        }
+      }
+      
+      createVillageMeshes();
 
 // Simple first-person hands (box placeholders)
 const hands = {
