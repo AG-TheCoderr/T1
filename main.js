@@ -1,19 +1,23 @@
 (function(){
   'use strict';
 
-  const appEl = document.getElementById('app');
-  const overlayEl = document.getElementById('overlay');
-  const startBtn = document.getElementById('startBtn');
-  const statusEl = document.getElementById('status');
+  // Wait for Three.js to be loaded
+  function initApp() {
+    const appEl = document.getElementById('app');
+    const overlayEl = document.getElementById('overlay');
+    const startBtn = document.getElementById('startBtn');
+    const statusEl = document.getElementById('status');
 
-  if (!window.THREE) {
-    if (statusEl) {
-      statusEl.textContent = 'Three.js failed to load. Please ensure you are online and refresh the page.';
-      statusEl.style.display = 'block';
+    if (!window.THREE) {
+      if (statusEl) {
+        statusEl.textContent = 'Three.js failed to load. Please ensure you are online and refresh the page.';
+        statusEl.style.display = 'block';
+      }
+      if (startBtn) startBtn.disabled = true;
+      return;
     }
-    if (startBtn) startBtn.disabled = true;
-    return;
-  }
+
+    console.log('Initializing app with Three.js loaded');
 
   // Settings (declare early so renderer init can use them)
   const settings = {
@@ -681,6 +685,369 @@ const groundMat = new THREE.MeshLambertMaterial({ map: groundTex });
       // Initialize spatial partitioning for optimized collision detection
       initSpatialGrid();
 
+      // === ANIMAL SYSTEM ===
+      // Animal management system with domestic and hostile creatures
+      const animals = [];
+      const animalSpatialGrid = new Map(); // separate spatial grid for animals
+      
+      // Animal class definitions
+      class Animal {
+        constructor(type, x, z) {
+          this.type = type;
+          this.position = new THREE.Vector3(x, terrainHeightAt(x, z), z);
+          this.velocity = new THREE.Vector3();
+          this.mesh = null;
+          this.state = 'idle'; // idle, walking, running, eating, fleeing, hunting
+          this.stateTime = 0;
+          this.targetPosition = null;
+          this.health = 100;
+          this.hunger = 50;
+          this.fear = 0;
+          this.lastUpdate = 0;
+          this.wanderTimer = 0;
+          this.animationPhase = Math.random() * Math.PI * 2;
+          
+          // Animal-specific properties
+          this.config = this.getAnimalConfig(type);
+          this.createMesh();
+        }
+        
+        getAnimalConfig(type) {
+          const configs = {
+            // Domestic animals
+            cow: {
+              size: { x: 0.8, y: 0.6, z: 1.2 },
+              color: 0x8B4513,
+              speed: 1.5,
+              hostile: false,
+              fleeSpeed: 3.0,
+              wanderRadius: 15,
+              maxHealth: 100,
+              sounds: ['moo'],
+              biomes: ['grassland', 'forest']
+            },
+            sheep: {
+              size: { x: 0.6, y: 0.5, z: 0.9 },
+              color: 0xF5F5DC,
+              speed: 2.0,
+              hostile: false,
+              fleeSpeed: 4.0,
+              wanderRadius: 12,
+              maxHealth: 80,
+              sounds: ['baa'],
+              biomes: ['grassland', 'hills']
+            },
+            chicken: {
+              size: { x: 0.3, y: 0.3, z: 0.4 },
+              color: 0xFFFFFF,
+              speed: 3.0,
+              hostile: false,
+              fleeSpeed: 5.0,
+              wanderRadius: 8,
+              maxHealth: 30,
+              sounds: ['cluck'],
+              biomes: ['grassland', 'forest'],
+              canFly: true
+            },
+            pig: {
+              size: { x: 0.7, y: 0.5, z: 1.0 },
+              color: 0xFFC0CB,
+              speed: 1.8,
+              hostile: false,
+              fleeSpeed: 3.5,
+              wanderRadius: 10,
+              maxHealth: 90,
+              sounds: ['oink'],
+              biomes: ['grassland', 'forest']
+            },
+            // Hostile animals
+            lion: {
+              size: { x: 1.0, y: 0.8, z: 1.8 },
+              color: 0xDAA520,
+              speed: 4.0,
+              hostile: true,
+              huntSpeed: 8.0,
+              wanderRadius: 25,
+              maxHealth: 150,
+              attackRange: 2.0,
+              damage: 25,
+              sounds: ['roar'],
+              biomes: ['grassland', 'savanna']
+            },
+            elephant: {
+              size: { x: 2.0, y: 2.5, z: 3.0 },
+              color: 0x708090,
+              speed: 2.5,
+              hostile: true,
+              chargeSpeed: 6.0,
+              wanderRadius: 30,
+              maxHealth: 300,
+              attackRange: 3.0,
+              damage: 40,
+              sounds: ['trumpet'],
+              biomes: ['savanna', 'forest']
+            },
+            rhinoceros: {
+              size: { x: 1.5, y: 1.2, z: 2.5 },
+              color: 0x696969,
+              speed: 3.0,
+              hostile: true,
+              chargeSpeed: 7.0,
+              wanderRadius: 20,
+              maxHealth: 200,
+              attackRange: 2.5,
+              damage: 35,
+              sounds: ['snort'],
+              biomes: ['savanna', 'grassland']
+            },
+            bird: {
+              size: { x: 0.2, y: 0.2, z: 0.3 },
+              color: 0x4169E1,
+              speed: 2.0,
+              hostile: false,
+              fleeSpeed: 8.0,
+              wanderRadius: 50,
+              maxHealth: 20,
+              flying: true,
+              flightHeight: 8,
+              sounds: ['chirp'],
+              biomes: ['forest', 'grassland', 'mountains']
+            }
+          };
+          return configs[type] || configs.cow;
+        }
+        
+        createMesh() {
+          const config = this.config;
+          const geometry = new THREE.BoxGeometry(config.size.x, config.size.y, config.size.z);
+          const material = new THREE.MeshLambertMaterial({ color: config.color });
+          this.mesh = new THREE.Mesh(geometry, material);
+          this.mesh.position.copy(this.position);
+          this.mesh.castShadow = true;
+          this.mesh.receiveShadow = true;
+          scene.add(this.mesh);
+        }
+        
+        update(deltaTime) {
+          this.stateTime += deltaTime;
+          this.lastUpdate = Date.now();
+          
+          // Update position to follow terrain
+          this.position.y = terrainHeightAt(this.position.x, this.position.z) + this.config.size.y / 2;
+          
+          // Simple AI behavior
+          this.updateBehavior(deltaTime);
+          
+          // Apply velocity
+          this.position.add(tmpVec.copy(this.velocity).multiplyScalar(deltaTime));
+          
+          // Update mesh position with simple animation
+          this.animationPhase += deltaTime * 3;
+          const bobAmount = this.config.flying ? 0.3 : 0.05;
+          const bob = Math.sin(this.animationPhase) * bobAmount;
+          
+          if (this.config.flying) {
+            this.mesh.position.set(
+              this.position.x, 
+              this.position.y + this.config.flightHeight + bob, 
+              this.position.z
+            );
+          } else {
+            this.mesh.position.set(this.position.x, this.position.y + bob, this.position.z);
+          }
+          
+          // Face movement direction
+          if (this.velocity.length() > 0.1) {
+            const angle = Math.atan2(this.velocity.x, this.velocity.z);
+            this.mesh.rotation.y = angle;
+          }
+        }
+        
+        updateBehavior(deltaTime) {
+          const playerDistance = this.position.distanceTo(yaw.position);
+          
+          // Check for player proximity
+          if (!this.config.hostile && playerDistance < 5) {
+            this.setState('fleeing');
+          } else if (this.config.hostile && playerDistance < this.config.attackRange) {
+            this.setState('hunting');
+          }
+          
+          switch (this.state) {
+            case 'idle':
+              this.velocity.multiplyScalar(0.95); // slow down
+              this.wanderTimer -= deltaTime;
+              if (this.wanderTimer <= 0) {
+                this.setState('walking');
+                this.wanderTimer = 2 + Math.random() * 3;
+              }
+              break;
+              
+            case 'walking':
+              if (!this.targetPosition || this.position.distanceTo(this.targetPosition) < 1) {
+                this.setRandomTarget();
+              }
+              this.moveTowards(this.targetPosition, this.config.speed, deltaTime);
+              if (Math.random() < 0.02) this.setState('idle');
+              break;
+              
+            case 'fleeing':
+              const fleeDirection = tmpVec.subVectors(this.position, yaw.position).normalize();
+              this.targetPosition = this.position.clone().add(fleeDirection.multiplyScalar(10));
+              this.moveTowards(this.targetPosition, this.config.fleeSpeed || this.config.speed * 2, deltaTime);
+              if (playerDistance > 10) this.setState('walking');
+              break;
+              
+            case 'hunting':
+              if (this.config.hostile) {
+                this.targetPosition = yaw.position.clone();
+                this.moveTowards(this.targetPosition, this.config.huntSpeed || this.config.speed * 2, deltaTime);
+              }
+              break;
+          }
+        }
+        
+        setState(newState) {
+          this.state = newState;
+          this.stateTime = 0;
+        }
+        
+        setRandomTarget() {
+          const angle = Math.random() * Math.PI * 2;
+          const distance = Math.random() * this.config.wanderRadius;
+          this.targetPosition = new THREE.Vector3(
+            this.position.x + Math.cos(angle) * distance,
+            0,
+            this.position.z + Math.sin(angle) * distance
+          );
+          
+          // Keep within terrain bounds
+          const halfSize = groundSize * 0.4;
+          this.targetPosition.x = Math.max(-halfSize, Math.min(halfSize, this.targetPosition.x));
+          this.targetPosition.z = Math.max(-halfSize, Math.min(halfSize, this.targetPosition.z));
+        }
+        
+        moveTowards(target, speed, deltaTime) {
+          const direction = tmpVec.subVectors(target, this.position).normalize();
+          this.velocity.copy(direction).multiplyScalar(speed);
+        }
+        
+        destroy() {
+          if (this.mesh) {
+            scene.remove(this.mesh);
+            this.mesh.geometry.dispose();
+            this.mesh.material.dispose();
+          }
+        }
+      }
+      
+      // Animal spawning system
+      function spawnAnimals() {
+        const animalTypes = {
+          domestic: ['cow', 'sheep', 'chicken', 'pig'],
+          hostile: ['lion', 'elephant', 'rhinoceros'],
+          neutral: ['bird']
+        };
+        
+        const counts = {
+          domestic: 15,
+          hostile: 5,
+          neutral: 20
+        };
+        
+        // Spawn domestic animals
+        for (let i = 0; i < counts.domestic; i++) {
+          const type = animalTypes.domestic[Math.floor(Math.random() * animalTypes.domestic.length)];
+          spawnAnimal(type, 'safe');
+        }
+        
+        // Spawn hostile animals (farther from spawn)
+        for (let i = 0; i < counts.hostile; i++) {
+          const type = animalTypes.hostile[Math.floor(Math.random() * animalTypes.hostile.length)];
+          spawnAnimal(type, 'dangerous');
+        }
+        
+        // Spawn neutral animals
+        for (let i = 0; i < counts.neutral; i++) {
+          const type = animalTypes.neutral[Math.floor(Math.random() * animalTypes.neutral.length)];
+          spawnAnimal(type, 'anywhere');
+        }
+      }
+      
+      function spawnAnimal(type, zone) {
+        const maxAttempts = 50;
+        let attempts = 0;
+        
+        while (attempts < maxAttempts) {
+          let x, z;
+          
+          switch (zone) {
+            case 'safe':
+              // Spawn closer to player spawn point
+              x = (Math.random() - 0.5) * groundSize * 0.3;
+              z = (Math.random() - 0.5) * groundSize * 0.3;
+              break;
+            case 'dangerous':
+              // Spawn farther from center
+              const angle = Math.random() * Math.PI * 2;
+              const distance = groundSize * 0.2 + Math.random() * groundSize * 0.2;
+              x = Math.cos(angle) * distance;
+              z = Math.sin(angle) * distance;
+              break;
+            case 'anywhere':
+            default:
+              x = (Math.random() - 0.5) * groundSize * 0.8;
+              z = (Math.random() - 0.5) * groundSize * 0.8;
+              break;
+          }
+          
+          // Check if position is valid (not too steep, not colliding with trees)
+          const normal = terrainNormalAt(x, z);
+          if (normal.y < 0.8) {
+            attempts++;
+            continue;
+          }
+          
+          // Check distance from trees
+          let tooClose = false;
+          for (const collider of treeColliders) {
+            const dist = Math.sqrt((x - collider.x) ** 2 + (z - collider.z) ** 2);
+            if (dist < collider.r + 2) {
+              tooClose = true;
+              break;
+            }
+          }
+          
+          if (!tooClose) {
+            const animal = new Animal(type, x, z);
+            animals.push(animal);
+            break;
+          }
+          
+          attempts++;
+        }
+      }
+      
+      // Update all animals
+      function updateAnimals(deltaTime) {
+        for (let i = animals.length - 1; i >= 0; i--) {
+          const animal = animals[i];
+          animal.update(deltaTime);
+          
+          // Remove animals that are too far away (for performance)
+          const distanceToPlayer = animal.position.distanceTo(yaw.position);
+          if (distanceToPlayer > 100) {
+            animal.destroy();
+            animals.splice(i, 1);
+          }
+        }
+      }
+      
+      // Initialize animal system
+      spawnAnimals();
+      
+      console.log(`Spawned ${animals.length} animals in the world`);
+
 // Simple first-person hands (box placeholders)
 const hands = {
 left: {
@@ -1161,6 +1528,9 @@ if (yaw.position.y <= groundY) {
       hudAccum = 0;
     }
 
+    // Update animals
+    updateAnimals(dt);
+
     renderer.render(scene, camera);
     requestAnimationFrame(animate);
   }
@@ -1229,6 +1599,23 @@ renderer.setSize(window.innerWidth, window.innerHeight);
         }
       }
     }
+  }
+
+  } // End of initApp function
+
+  // Initialize when Three.js is ready
+  if (window.THREE) {
+    initApp();
+  } else {
+    // Wait for Three.js to load
+    function checkThree() {
+      if (window.THREE) {
+        initApp();
+      } else {
+        setTimeout(checkThree, 100);
+      }
+    }
+    checkThree();
   }
 
 })();

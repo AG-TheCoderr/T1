@@ -5,7 +5,31 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>First-Person 3D on Green Ground</title>
   <link rel="stylesheet" href="style.css">
-  <script src="three-minimal.js"></script>
+  <script>
+    // Try to load Three.js with fallback
+    window.threeLoaded = false;
+    
+    function initThree() {
+      window.threeLoaded = true;
+      console.log('Three.js available, enabling start button');
+      const startBtn = document.getElementById('startBtn');
+      if (startBtn) startBtn.disabled = false;
+    }
+    
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
+    script.crossOrigin = 'anonymous';
+    script.referrerPolicy = 'no-referrer';
+    script.onerror = function() {
+      console.warn('CDN failed, loading local fallback...');
+      const fallback = document.createElement('script');
+      fallback.src = 'three-minimal.js';
+      fallback.onload = initThree;
+      document.head.appendChild(fallback);
+    };
+    script.onload = initThree;
+    document.head.appendChild(script);
+  </script>
   <script src="main.js" defer></script>
 </head>
 <body>
