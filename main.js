@@ -73,7 +73,12 @@ treeSlopeMaxY: 0.9,       // require normal.y >= this (flatter ground)
 // Performance optimization flags
 simplifiedTrees: true,    // use simpler tree geometry
 fastTextures: true,       // use faster texture generation
-spatialCollision: true    // use spatial partitioning for collisions
+spatialCollision: true,   // use spatial partitioning for collisions
+// Adaptive quality system
+adaptiveQuality: true,    // enable automatic quality adjustments
+lowFpsThreshold: 45,      // FPS below which quality reduces
+highFpsThreshold: 55,     // FPS above which quality can increase
+qualityAdjustDelay: 2.0   // seconds between quality adjustments
   };
 
 // Player collision size (horizontal cylinder radius)
@@ -855,6 +860,14 @@ hands.right.mesh.visible = false;
         lastHandKey = 'e';
         lastHandTime = nowMs;
       }
+      else if (k === 'p') {
+        // Toggle performance mode
+        if (!e.repeat) {
+          settings.simplifiedTrees = !settings.simplifiedTrees;
+          settings.fastTextures = !settings.fastTextures;
+          console.log(`Performance mode: ${settings.simplifiedTrees ? 'Fast' : 'Quality'}`);
+        }
+      }
   });
   window.addEventListener('keyup', (e) => {
 const k = e.key.toLowerCase();
@@ -883,6 +896,7 @@ let canJump = true;     // jump cooldown: true only when allowed
 let wasGrounded = true; // track landing transitions
 // Speed meter HUD state
 const speedEl = document.getElementById('speedMeter');
+const perfEl = document.getElementById('perfMeter');
 let hudAccum = 0;
 const hudInterval = 0.1; // seconds, ~10 Hz updates
 
@@ -1050,40 +1064,45 @@ if (yaw.position.y <= groundY) {
     }
     wasGrounded = grounded;
 
-// Camera bobbing when moving and grounded (optimized)
-const horizontalSpeed = Math.hypot(velocity.x, velocity.z);
-
-// Update sprint state: active when either Shift is held or double-tap W triggered, while holding W
-const sprintActive = ((keys.shift || sprinting) && keys.w && horizontalSpeed > 0.1);
-// If W released or neither Shift nor double-tap active, stop sprint; start a short cooldown to avoid instant retrigger
-if (!keys.w || (!keys.shift && !sprinting)) {
-if (sprinting) { sprintCooldownTimer = sprintCooldown; }
-sprinting = false;
-// Reset Q/E boost history when leaving sprint intent
-qeHead = qeTail;
-lastHandKey = '';
-}
-const targetFov = sprintActive ? settings.sprintFov : settings.baseFov;
-const fovAlpha = 1 - Math.exp(-settings.fovSmoothing * dt);
-const newFov = camera.fov + (targetFov - camera.fov) * fovAlpha;
-if (Math.abs(newFov - camera.fov) > 0.01) {
-camera.fov = newFov;
-camera.updateProjectionMatrix();
-}
-    if (grounded && horizontalSpeed > 0.1) {
+    // Camera bobbing when moving and grounded (skip for low performance)
+    const horizontalSpeed = Math.hypot(velocity.x, velocity.z);
+    const shouldBob = !settings.adaptiveQuality || fpsAccumulator === 0 || (1 / (fpsAccumulator / Math.max(1, fpsFrames))) > settings.lowFpsThreshold;
+    
+    // Update sprint state: active when either Shift is held or double-tap W triggered, while holding W
+    const sprintActive = ((keys.shift || sprinting) && keys.w && horizontalSpeed > 0.1);
+    // If W released or neither Shift nor double-tap active, stop sprint; start a short cooldown to avoid instant retrigger
+    if (!keys.w || (!keys.shift && !sprinting)) {
+      if (sprinting) { sprintCooldownTimer = sprintCooldown; }
+      sprinting = false;
+      // Reset Q/E boost history when leaving sprint intent
+      qeHead = qeTail;
+      lastHandKey = '';
+    }
+    
+    const targetFov = sprintActive ? settings.sprintFov : settings.baseFov;
+    const fovAlpha = 1 - Math.exp(-settings.fovSmoothing * dt);
+    const newFov = camera.fov + (targetFov - camera.fov) * fovAlpha;
+    if (Math.abs(newFov - camera.fov) > 0.01) {
+      camera.fov = newFov;
+      camera.updateProjectionMatrix();
+    }
+    
+    if (shouldBob && grounded && horizontalSpeed > 0.1) {
       const speedRatio = Math.max(0.25, horizontalSpeed / settings.moveSpeed);
       const bobFreq = settings.bobFrequency * speedRatio; // faster when moving faster
       bobPhase += bobFreq * dt * Math.PI * 2;
       const bobOffset = Math.sin(bobPhase) * settings.bobIntensity;
       pitch.position.y = cameraBaseY + bobOffset;
-    } else {
+    } else if (shouldBob) {
       // return to base smoothly (cached calculation)
       const returnSpeed = Math.min(1, dt * 10);
       pitch.position.y += (cameraBaseY - pitch.position.y) * returnSpeed;
     }
 
-    // Update hands animation
-    updateHands(dt);
+    // Update hands animation (skip if performance is critical)
+    if (!settings.adaptiveQuality || fpsAccumulator === 0 || (1 / (fpsAccumulator / Math.max(1, fpsFrames))) > settings.lowFpsThreshold) {
+      updateHands(dt);
+    }
 
     // Update sprint timers: expire double-tap window and cooldown
     {
@@ -1124,11 +1143,21 @@ camera.updateProjectionMatrix();
       }
     }
 
-    // Update speed HUD at ~10 Hz using horizontal speed
+    // Update speed HUD at reduced frequency for performance
     hudAccum += dt;
-    if (hudAccum >= hudInterval) {
+    const hudUpdateInterval = settings.adaptiveQuality && fpsAccumulator > 0 && (1 / (fpsAccumulator / Math.max(1, fpsFrames))) < settings.lowFpsThreshold ? 0.25 : hudInterval;
+    if (hudAccum >= hudUpdateInterval) {
       const horizSpeed = Math.hypot(velocity.x, velocity.z);
       if (speedEl) speedEl.textContent = `Speed: ${horizSpeed.toFixed(2)} m/s`;
+      
+      // Update performance meter
+      if (perfEl && fpsAccumulator > 0) {
+        const currentFPS = Math.round(1 / (fpsAccumulator / Math.max(1, fpsFrames)));
+        const quality = settings.simplifiedTrees ? 'Fast' : 'High';
+        const pixelRatio = (currentPixelRatio * 100).toFixed(0);
+        perfEl.textContent = `${currentFPS} FPS | ${quality} | ${pixelRatio}% res`;
+      }
+      
       hudAccum = 0;
     }
 
