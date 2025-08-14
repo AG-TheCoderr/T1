@@ -70,6 +70,15 @@ terrainSeed: 4242,
 treeCount: 80,            // reduced tree count for better performance
 treeMaxTries: 1000,       // reduced placement attempts for faster loading
 treeSlopeMaxY: 0.9,       // require normal.y >= this (flatter ground)
+// Animal counts
+animalCounts: {
+  chicken: 20,
+  lion: 5,
+  elephant: 4,
+  rhino: 4,
+  eagle: 3,
+},
+animalMaxPlacementTries: 2000,
 // Performance optimization flags
 simplifiedTrees: true,    // use simpler tree geometry
 fastTextures: true,       // use faster texture generation
@@ -84,6 +93,15 @@ qualityAdjustDelay: 2.0   // seconds between quality adjustments
 // Player collision size (horizontal cylinder radius)
 // Used for tree collision push-out to prevent walking through trunks
 settings.playerRadius = 0.35;
+
+// Animal properties
+const ANIMAL_STATS = {
+    chicken:  { speed: 1.8, runSpeed: 3.0, detectionRadius: 20, fleeRadius: 15, health: 4, loot: ['feather', 'raw chicken'] },
+    lion:     { speed: 2.5, runSpeed: 5.5, detectionRadius: 35, attackRadius: 2.5, health: 20, loot: ['leather', 'raw meat'] },
+    elephant: { speed: 2.2, runSpeed: 4.5, detectionRadius: 30, attackRadius: 3.5, health: 30, loot: ['leather', 'raw meat', 'tusk'] },
+    rhino:    { speed: 2.4, runSpeed: 5.0, detectionRadius: 30, attackRadius: 3.0, health: 25, loot: ['leather', 'raw meat', 'horn'] },
+    eagle:    { speed: 6.0, runSpeed: 9.0, detectionRadius: 60, attackRadius: 5.0, health: 8, loot: ['feather', 'raw meat'] },
+};
 
   // Scene setup
 const scene = new THREE.Scene();
@@ -678,6 +696,164 @@ const groundMat = new THREE.MeshLambertMaterial({ map: groundTex });
         }
       })();
       
+      // --- Animals ---
+      function addAnimals() {
+        // --- Materials (re-usable) ---
+        const materials = {
+          chicken: new THREE.MeshLambertMaterial({ color: 0xfee8d6 }), // Off-white
+          lion: new THREE.MeshLambertMaterial({ color: 0xd2b48c }),    // Tan
+          elephant: new THREE.MeshLambertMaterial({ color: 0x9e9e9e }),// Gray
+          rhino: new THREE.MeshLambertMaterial({ color: 0x8d8d8d }),   // Darker Gray
+          eagle: new THREE.MeshLambertMaterial({ color: 0x8b4513 }),   // Saddle Brown
+          horn: new THREE.MeshLambertMaterial({ color: 0xf0f0f0 }),
+          tail: new THREE.MeshLambertMaterial({ color: 0xc19a6b }),
+        };
+
+        // --- Animal Model Definitions ---
+        const animalDefs = {
+          chicken: () => {
+            const group = new THREE.Group();
+            const body = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.4, 0.35), materials.chicken);
+            const head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 8), materials.chicken);
+            head.position.y = 0.25;
+            const beak = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.1, 4), materials.horn);
+            beak.position.set(0, 0.25, 0.2);
+            beak.rotation.x = Math.PI / 2;
+            group.add(body, head, beak);
+            return group;
+          },
+          lion: () => {
+              const group = new THREE.Group();
+              const body = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.5, 0.4), materials.lion);
+              const head = new THREE.Mesh(new THREE.SphereGeometry(0.25, 8, 8), materials.lion);
+              head.position.x = 0.55;
+              const tail = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.6, 6), materials.tail);
+              tail.position.set(-0.6, 0.2, 0);
+              tail.rotation.z = Math.PI / 4;
+              group.add(body, head, tail);
+              return group;
+          },
+          elephant: () => {
+              const group = new THREE.Group();
+              const body = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1, 0.8), materials.elephant);
+              const head = new THREE.Mesh(new THREE.SphereGeometry(0.4, 12, 12), materials.elephant);
+              head.position.x = 0.7;
+              const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.05, 0.9, 8), materials.elephant);
+              trunk.position.set(0.7, -0.4, 0);
+              trunk.rotation.z = -Math.PI / 8;
+              group.add(body, head, trunk);
+              return group;
+          },
+          rhino: () => {
+              const group = new THREE.Group();
+              const body = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.8, 0.7), materials.rhino);
+              const head = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.4, 0.5), materials.rhino);
+              head.position.x = 0.8;
+              const horn = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.4, 8), materials.horn);
+              horn.position.set(1.0, 0.2, 0);
+              horn.rotation.z = -Math.PI / 12;
+              group.add(body, head, horn);
+              return group;
+          },
+          eagle: () => {
+              const group = new THREE.Group();
+              const body = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.1, 0.5, 8), materials.eagle);
+              body.rotation.z = Math.PI / 2;
+              const head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 8), materials.chicken); // white head
+              head.position.x = 0.3;
+              const wing = new THREE.BoxGeometry(0.8, 0.05, 0.3);
+              const leftWing = new THREE.Mesh(wing, materials.eagle);
+              leftWing.position.z = -0.4;
+              const rightWing = new THREE.Mesh(wing, materials.eagle);
+              rightWing.position.z = 0.4;
+              group.add(body, head, leftWing, rightWing);
+              return group;
+          }
+        };
+
+        // --- Procedural Spawning Logic ---
+        const counts = settings.animalCounts || { chicken: 10, lion: 2, elephant: 2, rhino: 2, eagle: 1 };
+        const totalAnimals = Object.values(counts).reduce((a, b) => a + b, 0);
+        const tries = settings.animalMaxPlacementTries || (totalAnimals * 10);
+        let placed = { chicken: 0, lion: 0, elephant: 0, rhino: 0, eagle: 0 };
+        let attempts = 0;
+
+        const minX = -groundSize * 0.48, maxX = groundSize * 0.48;
+        const minZ = -groundSize * 0.48, maxZ = groundSize * 0.48;
+
+        while (attempts < tries) {
+          attempts++;
+          const allPlaced = Object.keys(placed).every(type => placed[type] >= counts[type]);
+          if (allPlaced) break;
+
+          const x = THREE.MathUtils.lerp(minX, maxX, Math.random());
+          const z = THREE.MathUtils.lerp(minZ, maxZ, Math.random());
+
+          if (x*x + z*z < 25*25) continue; // Don't spawn too close to the player's start point
+
+          const y = terrainHeightAt(x, z);
+          const n = terrainNormalAt(x, z);
+
+          // Determine possible spawns based on biome characteristics
+          const possibleSpawns = [];
+
+          // Eagles spawn in high-altitude areas
+          if (y > (settings.terrainHeight * 0.4) && placed.eagle < counts.eagle) {
+            possibleSpawns.push('eagle');
+          }
+
+          // Ground animals require relatively flat terrain
+          if (n.y > 0.92) {
+            let nearbyTrees = 0;
+            for (const tree of treeColliders) {
+              if ( (tree.x - x)**2 + (tree.z - z)**2 < 15*15 ) { // 15 unit radius
+                nearbyTrees++;
+              }
+            }
+
+            const isOpen = nearbyTrees < 2;
+            const isWooded = nearbyTrees >= 2 && nearbyTrees < 6;
+
+            // Savanna-like biome (flat, open) for large predators
+            if (isOpen) {
+              if (placed.lion < counts.lion) possibleSpawns.push('lion');
+              if (placed.elephant < counts.elephant) possibleSpawns.push('elephant');
+              if (placed.rhino < counts.rhino) possibleSpawns.push('rhino');
+            }
+            // Forest/Plains biome (flat, some trees) for prey
+            if (isWooded) {
+              if (placed.chicken < counts.chicken) possibleSpawns.push('chicken');
+            }
+          }
+
+          if (possibleSpawns.length > 0) {
+            const typeToSpawn = possibleSpawns[Math.floor(Math.random() * possibleSpawns.length)];
+
+            const mesh = animalDefs[typeToSpawn]();
+            mesh.userData.isAnimal = true; // Tag the group for raycasting
+            const spawnY = (typeToSpawn === 'eagle') ? y + 25 + Math.random() * 15 : y + 1.5;
+            mesh.position.set(x, spawnY, z);
+            scene.add(mesh);
+
+            const stats = ANIMAL_STATS[typeToSpawn];
+            animals.push({
+              mesh: mesh,
+              type: typeToSpawn,
+              state: 'idle',
+              health: stats.health,
+              vy: 0,
+              stateTimer: Math.random() * 5, // Start with a random timer
+              wanderTarget: null,
+              chaseTarget: null,
+              nestPosition: (typeToSpawn === 'eagle') ? mesh.position.clone() : null,
+            });
+            placed[typeToSpawn]++;
+          }
+        }
+        console.log('Finished placing animals:', placed);
+      }
+      addAnimals();
+
       // Initialize spatial partitioning for optimized collision detection
       initSpatialGrid();
 
@@ -867,8 +1043,44 @@ hands.right.mesh.visible = false;
           settings.fastTextures = !settings.fastTextures;
           console.log(`Performance mode: ${settings.simplifiedTrees ? 'Fast' : 'Quality'}`);
         }
+      } else if (k === 'f' && !e.repeat) {
+        playerAttack();
       }
   });
+
+  function playerAttack() {
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera({ x: 0, y: 0 }, camera); // Center of screen
+
+    const animalMeshes = animals.map(a => a.mesh);
+    const intersects = raycaster.intersectObjects(animalMeshes, true);
+
+    if (intersects.length > 0) {
+        let hitMesh = intersects[0].object;
+        while (hitMesh.parent && !hitMesh.userData.isAnimal) {
+            hitMesh = hitMesh.parent;
+        }
+
+        const hitAnimal = animals.find(a => a.mesh === hitMesh);
+        if (hitAnimal && hitMesh.position.distanceTo(yaw.position) < 12) { // Max attack range
+            hitAnimal.health -= 5; // Player damage
+            console.log(`Hit ${hitAnimal.type}, health remaining: ${hitAnimal.health}`);
+
+            if (hitAnimal.health <= 0) {
+                console.log(`${hitAnimal.type} has been defeated!`);
+                const loot = ANIMAL_STATS[hitAnimal.type].loot;
+                console.log(`Loot dropped: ${loot.join(', ')}`);
+
+                scene.remove(hitAnimal.mesh);
+                const index = animals.indexOf(hitAnimal);
+                if (index > -1) {
+                    animals.splice(index, 1);
+                }
+            }
+        }
+    }
+  }
+
   window.addEventListener('keyup', (e) => {
 const k = e.key.toLowerCase();
 if (k === 'w') {
@@ -1099,7 +1311,10 @@ if (yaw.position.y <= groundY) {
       pitch.position.y += (cameraBaseY - pitch.position.y) * returnSpeed;
     }
 
-    // Update hands animation (skip if performance is critical)
+    // Update animal behaviors
+    updateAnimals(dt);
+
+    // Update hands animation (skip if performance iscritical)
     if (!settings.adaptiveQuality || fpsAccumulator === 0 || (1 / (fpsAccumulator / Math.max(1, fpsFrames))) > settings.lowFpsThreshold) {
       updateHands(dt);
     }
@@ -1173,6 +1388,193 @@ camera.updateProjectionMatrix();
 renderer.setPixelRatio(currentPixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
   });
+
+  function findClosestAnimal(position, types, radius) {
+    let closest = null;
+    let closestDistSq = radius * radius;
+    for (const other of animals) {
+        if (!types.includes(other.type) || !other.mesh.parent) continue; // ignore despawned
+        const distSq = position.distanceToSquared(other.mesh.position);
+        if (distSq < closestDistSq) {
+            closestDistSq = distSq;
+            closest = other;
+        }
+    }
+    return closest;
+  }
+
+  function updateAnimals(dt) {
+    const playerPos = yaw.position;
+
+    for (const animal of animals) {
+      animal.stateTimer -= dt;
+      const stats = ANIMAL_STATS[animal.type];
+      const isGrounded = animal.type !== 'eagle';
+
+      // --- State Transitions (Detection) ---
+      const distToPlayerSq = playerPos.distanceToSquared(animal.mesh.position);
+
+      if (animal.state !== 'chasing' && animal.state !== 'fleeing') {
+          // Chicken fleeing logic
+          if (animal.type === 'chicken') {
+              let threat = findClosestAnimal(animal.mesh.position, ['lion', 'rhino', 'elephant'], stats.fleeRadius);
+              if (threat) {
+                  animal.state = 'fleeing';
+                  animal.chaseTarget = threat.mesh;
+              } else if (distToPlayerSq < stats.fleeRadius * stats.fleeRadius) {
+                  animal.state = 'fleeing';
+                  animal.chaseTarget = yaw; // Flee from player camera rig
+              }
+          }
+          // Predator chasing logic
+          else if (['lion', 'rhino', 'elephant'].includes(animal.type)) {
+              let prey = findClosestAnimal(animal.mesh.position, ['chicken'], stats.detectionRadius);
+              if (prey) {
+                  animal.state = 'chasing';
+                  animal.chaseTarget = prey.mesh;
+              } else if (distToPlayerSq < stats.detectionRadius * stats.detectionRadius && Math.random() < 0.05) {
+                  animal.state = 'chasing';
+                  animal.chaseTarget = yaw;
+              }
+          }
+          // Eagle nest defense logic
+          else if (animal.type === 'eagle') {
+              if (distToPlayerSq < (stats.detectionRadius * 0.6)**2 && playerPos.y < animal.nestPosition.y + 10) {
+                animal.state = 'chasing';
+                animal.chaseTarget = yaw;
+              }
+          }
+      }
+
+
+      // --- State Actions ---
+      switch (animal.state) {
+        case 'idle':
+          if (animal.stateTimer <= 0) {
+            animal.state = 'wandering';
+            const angle = Math.random() * Math.PI * 2;
+            const distance = 8 + Math.random() * 12;
+            animal.wanderTarget = new THREE.Vector3(
+              animal.mesh.position.x + Math.cos(angle) * distance,
+              0,
+              animal.mesh.position.z + Math.sin(angle) * distance
+            );
+          }
+          break;
+
+        case 'wandering':
+          if (!animal.wanderTarget) {
+            animal.state = 'idle';
+            animal.stateTimer = 2 + Math.random() * 4;
+            break;
+          }
+          const targetDir = animal.wanderTarget.clone().sub(animal.mesh.position);
+          if (isGrounded) targetDir.y = 0;
+          if (targetDir.lengthSq() < 2*2) {
+            animal.state = 'idle';
+            animal.wanderTarget = null;
+            animal.stateTimer = 2 + Math.random() * 4;
+          } else {
+            targetDir.normalize();
+            animal.mesh.position.addScaledVector(targetDir, stats.speed * dt);
+            const lookAtPos = animal.mesh.position.clone().add(targetDir);
+            animal.mesh.lookAt(lookAtPos.x, animal.mesh.position.y, lookAtPos.z);
+          }
+          break;
+
+        case 'fleeing':
+          if (!animal.chaseTarget || animal.chaseTarget.position.distanceToSquared(animal.mesh.position) > (stats.fleeRadius * 1.2)**2) {
+            animal.state = 'idle';
+            animal.chaseTarget = null;
+            animal.stateTimer = 2; // Cooldown
+            break;
+          }
+          const fleeDir = animal.mesh.position.clone().sub(animal.chaseTarget.position).normalize();
+          if (isGrounded) fleeDir.y = 0;
+          animal.mesh.position.addScaledVector(fleeDir, stats.runSpeed * dt);
+          const lookAtPosFlee = animal.mesh.position.clone().add(fleeDir);
+          animal.mesh.lookAt(lookAtPosFlee.x, animal.mesh.position.y, lookAtPosFlee.z);
+          break;
+
+        case 'chasing':
+            if (!animal.chaseTarget || (animal.chaseTarget.type !== 'Object3D' && !animal.chaseTarget.parent) || animal.chaseTarget.position.distanceToSquared(animal.mesh.position) > (stats.detectionRadius * 1.5)**2) {
+                animal.state = 'idle';
+                animal.chaseTarget = null;
+                animal.stateTimer = 3;
+                break;
+            }
+            const chaseDir = animal.chaseTarget.position.clone().sub(animal.mesh.position);
+            if (isGrounded) chaseDir.y = 0;
+
+            if (chaseDir.lengthSq() < stats.attackRadius**2) {
+                if (animal.stateTimer <= 0) { // Attack cooldown
+                    const targetIsPlayer = animal.chaseTarget === yaw;
+                    console.log(`${animal.type} is attacking ${targetIsPlayer ? 'the player' : 'a ' + animal.chaseTarget.type}!`);
+                    animal.stateTimer = 2.0; // 2s attack cooldown
+
+                    if (!targetIsPlayer) {
+                        const targetAnimal = animals.find(a => a.mesh === animal.chaseTarget);
+                        if (targetAnimal) {
+                            targetAnimal.health -= 7; // Predator damage
+                            if (targetAnimal.health <= 0) {
+                                console.log(`${targetAnimal.type} was killed by a ${animal.type}!`);
+                                scene.remove(targetAnimal.mesh);
+                                const index = animals.indexOf(targetAnimal);
+                                if (index > -1) animals.splice(index, 1);
+
+                                // Stop chasing
+                                animal.state = 'idle';
+                                animal.chaseTarget = null;
+                                animal.stateTimer = 3.0;
+                            }
+                        }
+                    }
+                }
+            } else {
+                chaseDir.normalize();
+                animal.mesh.position.addScaledVector(chaseDir, stats.runSpeed * dt);
+                animal.mesh.lookAt(animal.chaseTarget.position);
+            }
+            break;
+
+        case 'circling':
+            // Eagle-specific state
+            if (animal.type !== 'eagle') {
+                animal.state = 'idle';
+                break;
+            }
+            animal.stateTimer += dt * 0.25; // circling speed
+            const radius = 30;
+            const targetX = animal.nestPosition.x + Math.cos(animal.stateTimer) * radius;
+            const targetZ = animal.nestPosition.z + Math.sin(animal.stateTimer) * radius;
+            const targetY = animal.nestPosition.y + Math.sin(animal.stateTimer * 1.5) * 5;
+
+            const circleTargetPos = new THREE.Vector3(targetX, targetY, targetZ);
+            const moveDir = circleTargetPos.clone().sub(animal.mesh.position).normalize();
+            animal.mesh.position.addScaledVector(moveDir, stats.speed * dt);
+            animal.mesh.lookAt(circleTargetPos);
+
+            // Transition out of circling if threat is gone
+            if (animal.chaseTarget && animal.chaseTarget.position.distanceToSquared(animal.nestPosition) > (stats.detectionRadius * 0.7)**2) {
+                animal.chaseTarget = null;
+            }
+            break;
+      }
+
+      // --- Physics ---
+      if (isGrounded) {
+        const bodyHeight = (stats.attackRadius || 1.0) * 0.7;
+        const groundY = terrainHeightAt(animal.mesh.position.x, animal.mesh.position.z) + bodyHeight;
+        if (animal.mesh.position.y > groundY) {
+          animal.vy -= settings.gravity * dt;
+        } else {
+          animal.vy = 0;
+          animal.mesh.position.y = groundY;
+        }
+        animal.mesh.position.y += animal.vy * dt;
+      }
+    }
+  }
 
   // Hand animation logic
   function triggerHand(which) {
